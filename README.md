@@ -1,7 +1,9 @@
 # Bookmarks
 
 Eine sehr schlanke selbst gehostete Bookmark-Startseite. <br>
-Daten und Logo werden komplett über die Web-UI verwaltet. Du kannst deinen Bestand jederzeit als JSON exportieren und auf einer anderen Instanz wieder importieren.
+Daten und Logo werden komplett über die Web-UI verwaltet. Du kannst deinen Bestand jederzeit als JSON exportieren und auf einer anderen Instanz wieder importieren. <br>
+
+https://github.com/user-attachments/assets/60860c24-1304-4fce-b14f-ab6e38e6b574
 
 ## Quick Start
 
