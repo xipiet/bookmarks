@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bookmarks</title>
+    <link rel="icon" href="/logo">
+    <link rel="stylesheet" href="/src/styles.css">
+</head>
+<body>
+    <a href="https://github.com/xipiet/bookmarks" target="_blank" rel="noopener" class="logo-link">
+        <img src="/logo" alt="Logo" class="logo" id="pageLogo">
+    </a>
+
+    <div class="container">
+        <header class="page-header">
+            <h1>Bookmarks</h1>
+        </header>
+
+        <div id="emptyState" class="empty-state" hidden>
+            <h2>Noch keine Bookmarks geladen</h2>
+            <p>Lade eine eigene JSON-Datei hoch oder starte mit dem Beispiel.</p>
+            <div class="empty-actions">
+                <button class="btn btn-primary" id="emptyUploadBtn">JSON hochladen</button>
+                <button class="btn" id="emptyExampleBtn">Beispiel laden</button>
+            </div>
+        </div>
+
+        <div id="content" class="categories"></div>
+    </div>
+
+    <button class="command-palette-btn" id="commandBtn" title="Verwalten">+</button>
+
+    <input type="file" id="importFileInput" accept="application/json,.json" hidden>
+    <input type="file" id="logoFileInput" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden>
+
+    <!-- "+" Modal: tabs for Bookmarks (search/list) and Einstellungen (everything else) -->
+    <div class="modal" id="bookmarkModal">
+        <div class="modal-content modal-wide">
+            <div class="modal-header">
+                <h2 id="bookmarkModalTitle">Verwalten</h2>
+                <button class="close-btn" id="closeBtn">✕</button>
+            </div>
+            <div class="tab-nav" role="tablist">
+                <button class="tab-btn active" data-tab="bookmarks" role="tab">Bookmarks</button>
+                <button class="tab-btn" data-tab="settings" role="tab">⚙ Einstellungen</button>
+            </div>
+
+            <div class="tab-panel" data-panel="bookmarks">
+                <div class="search-wrapper">
+                    <input type="text" class="search-input" id="searchInput" placeholder="Suchen nach Bookmarks...">
+                </div>
+                <div class="modal-body" id="bookmarkList"></div>
+            </div>
+
+            <div class="tab-panel" data-panel="settings" hidden>
+                <div class="modal-body admin-panel" id="settingsPanel"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Modal (single entry) -->
+    <div class="modal" id="editModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="editModalTitle">Bookmark bearbeiten</h2>
+                <button class="close-btn" id="closeEditBtn">✕</button>
+            </div>
+            <div class="modal-body admin-panel" id="editForm"></div>
+        </div>
+    </div>
+
+    <!-- Modal that opens when a collapsed category is clicked on the main page -->
+    <div class="modal" id="toolsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="toolsModalTitle"></h2>
+                <button class="close-btn" id="closeToolsBtn">✕</button>
+            </div>
+            <div class="search-wrapper">
+                <input type="text" class="search-input" id="toolsSearchInput" placeholder="Suchen...">
+            </div>
+            <div class="modal-body" id="toolsList"></div>
+        </div>
+    </div>
+
+    <script src="/src/app.js"></script>
+</body>
+</html>

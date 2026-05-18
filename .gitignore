@@ -1,0 +1,18 @@
+node_modules/
+*.log
+.DS_Store
+.env
+*.backup
+CLAUDE.md
+.claude/
+
+# Per-instance bookmark data — never commit personal bookmarks
+bookmarks.json
+bookmarks.backup.json
+
+# Logo overrides uploaded via the UI (logo.png is the committed default)
+logo.user.png
+logo.user.svg
+logo.user.jpg
+logo.user.jpeg
+logo.user.webp

@@ -1,0 +1,59 @@
+{
+  "_meta": {
+    "filename": "bookmarks.example.json",
+    "importedAt": null
+  },
+  "categories": [
+    {
+      "name": "Development",
+      "collapsed": false,
+      "links": [
+        { "name": "GitHub", "url": "https://github.com" },
+        { "name": "MDN Web Docs", "url": "https://developer.mozilla.org" },
+        { "name": "Stack Overflow", "url": "https://stackoverflow.com" },
+        { "name": "DevDocs", "url": "https://devdocs.io" }
+      ]
+    },
+    {
+      "name": "Productivity",
+      "collapsed": false,
+      "links": [
+        { "name": "Notion", "url": "https://www.notion.so" },
+        { "name": "Trello", "url": "https://trello.com" },
+        { "name": "Google Calendar", "url": "https://calendar.google.com" }
+      ]
+    },
+    {
+      "name": "Reading",
+      "collapsed": false,
+      "links": [
+        { "name": "Hacker News", "url": "https://news.ycombinator.com" },
+        { "name": "Lobste.rs", "url": "https://lobste.rs" },
+        { "name": "The Verge", "url": "https://www.theverge.com" }
+      ]
+    },
+    {
+      "name": "Web-Tools",
+      "collapsed": true,
+      "links": [
+        { "name": "Can I use", "url": "https://caniuse.com" },
+        { "name": "RegExr", "url": "https://regexr.com" },
+        { "name": "JSON Formatter", "url": "https://jsonformatter.org" },
+        { "name": "Squoosh", "url": "https://squoosh.app" }
+      ]
+    },
+    {
+      "name": "Self-Hosting",
+      "collapsed": true,
+      "links": [
+        { "name": "Awesome Selfhosted", "url": "https://awesome-selfhosted.net" },
+        { "name": "selfh.st", "url": "https://selfh.st" }
+      ]
+    }
+  ],
+  "tools": [],
+  "bookmarks": [
+    { "name": "Example Site", "url": "https://example.com" },
+    { "name": "Wikipedia", "url": "https://www.wikipedia.org" }
+  ]
+}
