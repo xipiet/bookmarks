@@ -700,6 +700,58 @@ h1 {
     margin-bottom: 12px;
 }
 
+/* Settings: per-category collapse of its bookmark list (easier dragging) */
+.cat-toggle {
+    background: none;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    padding: 2px 4px;
+    flex-shrink: 0;
+    font-size: 0.8em;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+}
+
+.cat-toggle:hover {
+    color: #ddd;
+}
+
+.cat-toggle .chev {
+    display: inline-block;
+    transition: transform 0.2s ease;
+}
+
+.category-section:not(.collapsed) .cat-toggle .chev {
+    transform: rotate(90deg);
+}
+
+/* Drag handle sits right next to the chevron in the category header */
+.category-header .drag-handle {
+    margin-right: 0;
+}
+
+/* Collapsible region: grid-rows trick animates height without a fixed max */
+.category-body {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows 0.25s ease;
+}
+
+.category-section.collapsed .category-body {
+    grid-template-rows: 0fr;
+}
+
+.category-body-inner {
+    overflow: hidden;
+    min-height: 0;
+}
+
+.category-section.collapsed .category-header {
+    margin-bottom: 0;
+}
+
 .nested-item {
     margin-left: 20px;
     background: #151515;

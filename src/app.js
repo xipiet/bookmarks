@@ -279,15 +279,33 @@ function renderStatusLine() {
     el.innerHTML = html;
 }
 
+// Per-session view state for the settings panel: which categories currently
+// show their bookmark list. Keyed by the category *object* so the state
+// survives re-renders (after a drag or edit) but resets on import/reload.
+// Purely a view concern — never persisted to bookmarks.json.
+const expandedInSettings = new WeakSet();
+
+function toggleCategoryExpand(idx, btn) {
+    const cat = allData.categories[idx];
+    if (!cat) return;
+    const section = btn.closest('.category-section');
+    const expand = !expandedInSettings.has(cat);
+    if (expand) expandedInSettings.add(cat);
+    else expandedInSettings.delete(cat);
+    if (section) section.classList.toggle('collapsed', !expand);
+}
+
 function renderCategories() {
     const list = document.getElementById('categoriesList');
     if (!list) return;
     let html = '';
     allData.categories.forEach((cat, catIdx) => {
         const mode = isCollapsed(cat) ? 'eingeklappt' : 'ausgeklappt';
-        html += '<div class="category-section">'
+        const expanded = expandedInSettings.has(cat);
+        html += '<div class="category-section' + (expanded ? '' : ' collapsed') + '">'
               + '<div class="admin-item category-header" draggable="true" data-drag-type="category" data-category="' + catIdx + '">'
               + '<div class="drag-handle">⋮</div>'
+              + '<button type="button" class="cat-toggle" onclick="toggleCategoryExpand(' + catIdx + ', this)" title="Bookmarks ein-/ausklappen"><span class="chev">▶</span></button>'
               + '<div class="admin-item-content"><div>'
               + '<div style="font-weight:600;">' + escapeHtml(cat.name) + '</div>'
               + '<div class="admin-item-meta">' + cat.links.length + ' Bookmarks · ' + mode + '</div>'
@@ -296,6 +314,9 @@ function renderCategories() {
               + '<button class="btn btn-danger" onclick="deleteCategoryEntry(' + catIdx + ')">Löschen</button>'
               + '</div></div>';
 
+        // Collapsible body (bookmark list + add button). The grid-rows wrapper
+        // animates open/closed; see .category-body in styles.css.
+        html += '<div class="category-body"><div class="category-body-inner">';
         if (cat.links && cat.links.length > 0) {
             html += '<div class="category-bookmarks" data-category="' + catIdx + '">';
             cat.links.forEach((link, linkIdx) => {
@@ -311,8 +332,8 @@ function renderCategories() {
             });
             html += '</div>';
         }
-
         html += '<button class="btn btn-add-bookmark" onclick="addCategoryLink(' + catIdx + ')">+ Bookmark hinzufügen</button>'
+              + '</div></div>'
               + '</div>';
     });
     list.innerHTML = html || '<div class="no-results" style="padding:16px;text-align:center;">Keine Kategorien</div>';
