@@ -286,7 +286,9 @@ function renderCategories() {
     allData.categories.forEach((cat, catIdx) => {
         const mode = isCollapsed(cat) ? 'eingeklappt' : 'ausgeklappt';
         html += '<div class="category-section">'
-              + '<div class="admin-item category-header"><div class="admin-item-content"><div>'
+              + '<div class="admin-item category-header" draggable="true" data-drag-type="category" data-category="' + catIdx + '">'
+              + '<div class="drag-handle">⋮</div>'
+              + '<div class="admin-item-content"><div>'
               + '<div style="font-weight:600;">' + escapeHtml(cat.name) + '</div>'
               + '<div class="admin-item-meta">' + cat.links.length + ' Bookmarks · ' + mode + '</div>'
               + '</div></div><div class="admin-buttons">'
@@ -297,7 +299,7 @@ function renderCategories() {
         if (cat.links && cat.links.length > 0) {
             html += '<div class="category-bookmarks" data-category="' + catIdx + '">';
             cat.links.forEach((link, linkIdx) => {
-                html += '<div class="admin-item nested-item" draggable="true" data-category="' + catIdx + '" data-index="' + linkIdx + '">'
+                html += '<div class="admin-item nested-item" draggable="true" data-drag-type="link" data-category="' + catIdx + '" data-index="' + linkIdx + '">'
                       + '<div class="drag-handle">⋮</div>'
                       + '<div class="admin-item-content"><div>'
                       + '<div style="font-weight:600;" title="' + escapeHtml(link.name) + '">' + escapeHtml(link.name) + '</div>'
@@ -567,6 +569,18 @@ function initDragAndDrop() {
         item.addEventListener('drop', e => {
             e.preventDefault();
             if (!draggedElement || draggedElement === item) return;
+            const type = draggedElement.dataset.dragType;
+            if (type !== item.dataset.dragType) return; // Kategorien und Links nicht mischen
+
+            if (type === 'category') {
+                const cats = allData.categories;
+                const [moved] = cats.splice(parseInt(draggedElement.dataset.category, 10), 1);
+                cats.splice(parseInt(item.dataset.category, 10), 0, moved);
+                saveData();
+                return;
+            }
+
+            // type === 'link': nur innerhalb derselben Kategorie umsortieren
             const draggedCat = parseInt(draggedElement.dataset.category, 10);
             const draggedIdx = parseInt(draggedElement.dataset.index, 10);
             const dropCat = parseInt(item.dataset.category, 10);

@@ -684,6 +684,16 @@ h1 {
     background: #1a1a1a;
     margin: -12px -12px 12px -12px;
     border-radius: 8px 8px 0 0;
+    cursor: grab;
+}
+
+.category-header:active {
+    cursor: grabbing;
+}
+
+.category-header:active .drag-handle {
+    cursor: grabbing;
+    color: #999;
 }
 
 .category-bookmarks {
