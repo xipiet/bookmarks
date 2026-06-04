@@ -15,8 +15,48 @@ const EMPTY_DOC = { categories: [], tools: [], bookmarks: [] };
 app.use(bodyParser.json({ limit: '5mb' }));
 app.use(express.static(ROOT));
 
+// Serve the main page with CSS, JS and logo inlined, so a browser "Save Page
+// As" yields a single self-contained .html that still renders offline (file://)
+// regardless of the chosen save mode. The source files stay separate on disk
+// (the dev workflow is unaffected) — they are only stitched together here, read
+// fresh on every request so edits are still picked up on refresh.
 app.get('/', (req, res) => {
-  res.sendFile(path.join(ROOT, 'src', 'index.html'));
+  try {
+    let html = fs.readFileSync(path.join(ROOT, 'src', 'index.html'), 'utf8');
+    const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+    const js = fs.readFileSync(path.join(ROOT, 'src', 'app.js'), 'utf8');
+
+    // Inline the stylesheet. Escaping </style guards against a breakout.
+    html = html.replace(
+      '<link rel="stylesheet" href="/src/styles.css">',
+      '<style>\n' + css.replace(/<\/style/gi, '<\\/style') + '\n</style>'
+    );
+
+    // Inline the script. Must stay a CLASSIC script (not a module) so the
+    // global onclick="..." handlers keep resolving. Escaping </script guards
+    // against a breakout.
+    html = html.replace(
+      '<script src="/src/app.js"></script>',
+      '<script>\n' + js.replace(/<\/script/gi, '<\\/script') + '\n</script>'
+    );
+
+    // Inline the logo as a data URI for both the favicon and the header image,
+    // so the saved copy needs no external logo file. Precise tag strings keep
+    // app.js's own "/logo" reference (settings preview) untouched.
+    const logo = logoDataUri();
+    if (logo) {
+      html = html.replace('<link rel="icon" href="/logo">', '<link rel="icon" href="' + logo + '">');
+      html = html.replace(
+        '<img src="/logo" alt="Logo" class="logo" id="pageLogo">',
+        '<img src="' + logo + '" alt="Logo" class="logo" id="pageLogo">'
+      );
+    }
+
+    res.type('html').send(html);
+  } catch (error) {
+    console.error('Error rendering index:', error);
+    res.status(500).send('Failed to render page');
+  }
 });
 
 // Logo route: prefers a user-uploaded logo.user.* (overlay, gitignored)
@@ -32,6 +72,18 @@ const LOGO_DEFAULTS = [
   ['logo.png', 'image/png'],
   ['logo.svg', 'image/svg+xml'],
 ];
+
+// Resolve the active logo (user overlay first, then committed default) to a
+// base64 data: URI for inlining into the served page. Null if none exists.
+function logoDataUri() {
+  for (const [name, mime] of [...LOGO_USER_CANDIDATES, ...LOGO_DEFAULTS]) {
+    const p = path.join(ROOT, name);
+    if (fs.existsSync(p)) {
+      return 'data:' + mime + ';base64,' + fs.readFileSync(p).toString('base64');
+    }
+  }
+  return null;
+}
 
 app.get('/logo', (req, res) => {
   for (const [name, mime] of [...LOGO_USER_CANDIDATES, ...LOGO_DEFAULTS]) {

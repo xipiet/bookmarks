@@ -34,15 +34,66 @@ function isCollapsed(entry) {
 
 // --- data layer -------------------------------------------------------------
 
+// True when the page runs as a local copy (saved via Strg+S, opened as a
+// file://). There is no server to talk to, so we read/write the snapshot that
+// is embedded in the page itself instead of hitting /api/bookmarks.
+function isOfflineCopy() {
+    return location.protocol === 'file:';
+}
+
+function normalizeData() {
+    if (!allData._meta) allData._meta = {};
+    if (!Array.isArray(allData.tools)) allData.tools = [];
+    if (!Array.isArray(allData.categories)) allData.categories = [];
+    if (!Array.isArray(allData.bookmarks)) allData.bookmarks = [];
+}
+
+// Read the JSON snapshot embedded in the page (#embeddedData). Written by
+// persistEmbeddedData() on every render, so it gets captured when the user
+// saves the page with Strg+S. Returns true if usable data was found.
+function loadEmbeddedData() {
+    const el = document.getElementById('embeddedData');
+    if (!el || !el.textContent.trim()) return false;
+    try {
+        allData = JSON.parse(el.textContent);
+        normalizeData();
+        return true;
+    } catch (e) {
+        console.error('Eingebettete Daten unlesbar:', e);
+        return false;
+    }
+}
+
+// Mirror the current data into an inline <script> tag so a Strg+S save keeps a
+// self-contained snapshot. `<` is escaped so a bookmark named "</script>" can't
+// break out of the tag.
+function persistEmbeddedData() {
+    let el = document.getElementById('embeddedData');
+    if (!el) {
+        el = document.createElement('script');
+        el.id = 'embeddedData';
+        el.type = 'application/json';
+        document.body.appendChild(el);
+    }
+    try {
+        el.textContent = JSON.stringify(allData).replace(/</g, '\\u003c');
+    } catch (e) {
+        console.error('Konnte Daten nicht einbetten:', e);
+    }
+}
+
 async function loadData() {
+    // Local copy without a server: render from the embedded snapshot.
+    if (isOfflineCopy()) {
+        if (loadEmbeddedData()) renderAll();
+        else renderError('Lokale Kopie ohne eingebettete Daten — bitte die Seite erneut über den Server mit Strg+S speichern.');
+        return;
+    }
     try {
         const response = await fetch('/api/bookmarks');
         if (!response.ok) throw new Error('HTTP ' + response.status);
         allData = await response.json();
-        if (!allData._meta) allData._meta = {};
-        if (!Array.isArray(allData.tools)) allData.tools = [];
-        if (!Array.isArray(allData.categories)) allData.categories = [];
-        if (!Array.isArray(allData.bookmarks)) allData.bookmarks = [];
+        normalizeData();
 
         // Legacy migration: the old schema had a separate `tools` array for
         // categories that should render as clickable tiles. The `collapsed`
@@ -64,11 +115,20 @@ async function loadData() {
         renderAll();
     } catch (error) {
         console.error('Error loading bookmarks:', error);
+        // Server unreachable: fall back to an embedded snapshot if the page
+        // carries one (e.g. a saved copy opened over a non-file:// URL).
+        if (loadEmbeddedData()) { renderAll(); return; }
         renderError('Konnte Bookmarks nicht laden: ' + error.message);
     }
 }
 
 async function saveData() {
+    // In der lokalen Kopie gibt es keinen Server: Änderungen bleiben nur im
+    // Speicher (und in der Einbettung), bis erneut mit Strg+S gesichert wird.
+    if (isOfflineCopy()) {
+        renderAll();
+        return;
+    }
     try {
         const response = await fetch('/api/bookmarks', {
             method: 'POST',
@@ -111,6 +171,7 @@ function renderAll() {
     renderContent();
     renderAllBookmarks();
     if (isSettingsTabActive()) renderSettingsTab();
+    persistEmbeddedData();
 }
 
 function renderError(msg) {
