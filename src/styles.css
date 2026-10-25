@@ -290,6 +290,34 @@ h1 {
     flex-shrink: 0;
 }
 
+/* Offline notice (app.js renderBanner). Fixed at the top and above the
+   modals, so it stays visible wherever the user is. */
+.offline-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1001;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 6px 14px;
+    padding: 8px 16px;
+    background: #2e2410;
+    border-bottom: 1px solid #a8741a;
+    color: #ffd99a;
+    font-size: 0.9em;
+}
+
+.offline-banner[hidden] {
+    display: none;
+}
+
+.offline-reason {
+    color: #c9a56a;
+}
+
 .logo {
     width: 120px;
     height: 120px;

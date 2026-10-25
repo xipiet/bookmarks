@@ -41,12 +41,10 @@ function isCollapsed(entry) {
 
 // --- data layer -------------------------------------------------------------
 
-// True when the page runs as a local copy (saved via Strg+S, opened as a
-// file://). There is no server to talk to, so we read/write the snapshot that
-// is embedded in the page itself instead of hitting /api/bookmarks.
-function isOfflineCopy() {
-    return location.protocol === 'file:';
-}
+const SNAPSHOT_KEY = 'bookmarks.snapshot';
+const LOAD_TIMEOUT_MS = 4000;
+const SAVE_TIMEOUT_MS = 10000;
+const RETRY_DELAYS_MS = [3000, 10000, 30000, 60000];
 
 function normalizeData() {
     if (!allData._meta) allData._meta = {};
@@ -55,96 +53,172 @@ function normalizeData() {
     if (!Array.isArray(allData.bookmarks)) allData.bookmarks = [];
 }
 
-// Read the JSON snapshot embedded in the page (#embeddedData). Written by
-// persistEmbeddedData() on every render, so it gets captured when the user
-// saves the page with Strg+S. Returns true if usable data was found.
-function loadEmbeddedData() {
-    const el = document.getElementById('embeddedData');
-    if (!el || !el.textContent.trim()) return false;
+// fetch() with a time limit: with a half-connected VPN a request can hang for
+// minutes. Network errors and timeouts become readable German messages.
+async function fetchWithTimeout(url, options, ms) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
     try {
-        allData = JSON.parse(el.textContent);
-        normalizeData();
-        return true;
-    } catch (e) {
-        console.error('Eingebettete Daten unlesbar:', e);
-        return false;
+        return await fetch(url, { ...options, signal: controller.signal });
+    } catch (error) {
+        throw new Error(error.name === 'AbortError' ? 'Zeitüberschreitung' : 'Keine Verbindung');
+    } finally {
+        clearTimeout(timer);
     }
 }
 
-// Mirror the current data into an inline <script> tag so a Strg+S save keeps a
-// self-contained snapshot. `<` is escaped so a bookmark named "</script>" can't
-// break out of the tag.
-function persistEmbeddedData() {
-    let el = document.getElementById('embeddedData');
-    if (!el) {
-        el = document.createElement('script');
-        el.id = 'embeddedData';
-        el.type = 'application/json';
-        document.body.appendChild(el);
+// Only a 2xx that carries the app's marker header counts as an answer from
+// this server. Outside the LAN without VPN the name resolves to Cloudflare,
+// which replies with its own error page (HTTP 525), not a network error.
+async function fetchDoc() {
+    const response = await fetchWithTimeout('/api/bookmarks', { cache: 'no-store' }, LOAD_TIMEOUT_MS);
+    if (!response.ok) {
+        const hint = response.status >= 520 && response.status < 530 ? ', VPN aus?' : '';
+        throw new Error('Server nicht erreichbar (HTTP ' + response.status + hint + ')');
     }
+    if (response.headers.get('X-Bookmarks-App') !== '1') {
+        throw new Error('Unerwartete Antwort, nicht vom Bookmarks-Server');
+    }
+    return response.json();
+}
+
+// The last state the server confirmed, kept in localStorage so the page can
+// still show it while the server is out of reach. Never sent back to the
+// server: offline the page is read-only.
+function storeSnapshot() {
     try {
-        el.textContent = JSON.stringify(allData).replace(/</g, '\\u003c');
+        localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({ at: new Date().toISOString(), doc: allData }));
     } catch (e) {
-        console.error('Konnte Daten nicht einbetten:', e);
+        console.warn('Offline-Stand nicht gespeichert:', e);
     }
 }
 
-async function loadData() {
-    // Local copy without a server: render from the embedded snapshot.
-    if (isOfflineCopy()) {
-        if (loadEmbeddedData()) renderAll();
-        else renderError('Lokale Kopie ohne eingebettete Daten — bitte die Seite erneut über den Server mit Strg+S speichern.');
-        return;
-    }
+function readSnapshot() {
     try {
-        const response = await fetch('/api/bookmarks', { cache: 'no-store' });
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        allData = await response.json();
-        normalizeData();
-        editable = true;
+        const snap = JSON.parse(localStorage.getItem(SNAPSHOT_KEY));
+        return snap && snap.doc ? snap : null;
+    } catch {
+        return null;
+    }
+}
 
-        // Legacy migration: the old schema had a separate `tools` array for
-        // categories that should render as clickable tiles. The `collapsed`
-        // flag on each category covers that use case now, so fold any leftover
-        // tools entries into `categories` (defaulting to collapsed=true to
-        // preserve their previous visual behavior) and persist once.
-        if (allData.tools.length > 0) {
-            const migrated = allData.tools.map(t => ({
-                name: t.name,
-                collapsed: typeof t.collapsed === 'boolean' ? t.collapsed : true,
-                links: Array.isArray(t.links) ? t.links : [],
-            }));
-            allData.categories = [...allData.categories, ...migrated];
-            allData.tools = [];
-            renderAll();
-            // Not awaited: loadData also runs as the reload inside a failed
-            // save, and waiting there for the save queue would deadlock. If it
-            // doesn't persist now, the next load simply migrates again.
-            saveData();
-            return;
-        }
+// One load at a time: the retry timer, the online event and the retry button
+// can fire together.
+let loadPromise = null;
+function loadData() {
+    if (!loadPromise) loadPromise = loadFromServer().finally(() => { loadPromise = null; });
+    return loadPromise;
+}
 
-        renderAll();
+async function loadFromServer() {
+    let doc;
+    try {
+        doc = await fetchDoc();
     } catch (error) {
         console.error('Error loading bookmarks:', error);
-        editable = false;
-        // Server unreachable: fall back to an embedded snapshot if the page
-        // carries one (e.g. a saved copy opened over a non-file:// URL).
-        if (loadEmbeddedData()) { renderAll(); return; }
-        renderError('Konnte Bookmarks nicht laden: ' + error.message);
+        showOffline(error.message);
+        return;
     }
+    allData = doc;
+    normalizeData();
+    setOnline();
+    storeSnapshot();
+
+    // Legacy migration: the old schema had a separate `tools` array for
+    // categories that should render as clickable tiles. The `collapsed`
+    // flag on each category covers that use case now, so fold any leftover
+    // tools entries into `categories` (defaulting to collapsed=true to
+    // preserve their previous visual behavior) and persist once.
+    if (allData.tools.length > 0) {
+        const migrated = allData.tools.map(t => ({
+            name: t.name,
+            collapsed: typeof t.collapsed === 'boolean' ? t.collapsed : true,
+            links: Array.isArray(t.links) ? t.links : [],
+        }));
+        allData.categories = [...allData.categories, ...migrated];
+        allData.tools = [];
+        renderAll();
+        // Not awaited: loadData also runs as the reload inside a failed
+        // save, and waiting there for the save queue would deadlock. If it
+        // doesn't persist now, the next load simply migrates again.
+        saveData();
+        return;
+    }
+
+    renderAll();
 }
+
+// --- offline mode -----------------------------------------------------------
+
+let retryTimer = null;
+let retryCount = 0;
+
+// Server out of reach: show the last confirmed state read-only (or an error if
+// this device has none yet) and keep retrying in the background.
+function showOffline(reason) {
+    editable = false;
+    const snap = readSnapshot();
+    if (snap) {
+        allData = snap.doc;
+        normalizeData();
+        renderAll();
+    } else {
+        renderError('Konnte Bookmarks nicht laden: ' + reason);
+    }
+    renderBanner(snap && snap.at, reason);
+    scheduleRetry();
+}
+
+function setOnline() {
+    editable = true;
+    retryCount = 0;
+    clearTimeout(retryTimer);
+    renderBanner();
+}
+
+function scheduleRetry() {
+    clearTimeout(retryTimer);
+    const delay = RETRY_DELAYS_MS[Math.min(retryCount, RETRY_DELAYS_MS.length - 1)];
+    retryCount++;
+    // In a background tab nothing happens; the visibilitychange handler
+    // retries as soon as the tab is shown again.
+    retryTimer = setTimeout(() => {
+        if (document.visibilityState === 'visible') loadData();
+    }, delay);
+}
+
+function renderBanner(snapshotAt, reason) {
+    const banner = document.getElementById('offlineBanner');
+    if (editable) {
+        banner.hidden = true;
+        return;
+    }
+    const when = snapshotAt
+        ? new Date(snapshotAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })
+        : null;
+    banner.innerHTML = '<span><strong>Offline</strong>'
+        + (when ? ' · Stand vom ' + escapeHtml(when) + ' · nur lesen' : '') + '</span>'
+        + '<span class="offline-reason">' + escapeHtml(reason) + '</span>'
+        + '<button type="button" class="btn btn-sm" id="retryBtn">Erneut versuchen</button>';
+    document.getElementById('retryBtn').onclick = () => loadData();
+    banner.hidden = false;
+}
+
+// Back online or back on the tab: retry while offline, otherwise reload so
+// changes from other devices show up. Never while a save runs or a dialog is
+// open while editable — the dialogs hold indices into allData.
+function refreshFromServer() {
+    if (document.visibilityState !== 'visible') return;
+    if (editable && (savePromise || document.querySelector('.modal.active'))) return;
+    loadData();
+}
+
+// --- saving -----------------------------------------------------------------
 
 let savePromise = null;
 let saveAgain = false;
 
 async function saveData() {
-    // In der lokalen Kopie gibt es keinen Server: Änderungen bleiben nur im
-    // Speicher (und in der Einbettung), bis erneut mit Strg+S gesichert wird.
-    if (isOfflineCopy()) {
-        renderAll();
-        return;
-    }
     if (!requireEditable()) return false;
     // One request at a time: a change made while a save is in flight is sent
     // afterwards (with the then-current state), so an older request can never
@@ -175,11 +249,11 @@ async function saveData() {
 // what is actually stored.
 async function postData() {
     try {
-        const response = await fetch('/api/bookmarks', {
+        const response = await fetchWithTimeout('/api/bookmarks', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(allData),
-        });
+        }, SAVE_TIMEOUT_MS);
         if (response.status === 409) {
             alert('Die Bookmarks wurden inzwischen auf einem anderen Gerät oder in einem anderen Tab geändert. '
                 + 'Deine letzte Änderung wurde nicht gespeichert, der aktuelle Stand wird geladen.');
@@ -188,6 +262,7 @@ async function postData() {
         }
         const result = await readJson(response);
         if (result._meta) allData._meta = result._meta;
+        storeSnapshot();
         renderAll();
         return true;
     } catch (error) {
@@ -238,11 +313,12 @@ function renderAll() {
     renderContent();
     renderAllBookmarks();
     if (isSettingsTabActive()) renderSettingsTab();
-    persistEmbeddedData();
 }
 
 function renderError(msg) {
     const content = document.getElementById('content');
+    document.getElementById('emptyState').hidden = true;
+    content.hidden = false;
     content.innerHTML = '<div class="no-results">' + escapeHtml(msg) + '</div>';
 }
 
@@ -329,6 +405,11 @@ function switchTab(tab) {
 
 function renderSettingsTab() {
     const panel = document.getElementById('settingsPanel');
+
+    if (!editable) {
+        panel.innerHTML = '<div class="no-results">Offline: Bearbeiten ist erst wieder möglich, wenn der Server erreichbar ist.</div>';
+        return;
+    }
 
     const emptyCallout = isContentEmpty()
         ? '<div class="empty-callout"><span>Liste ist leer.</span>'
@@ -894,5 +975,24 @@ function initializeEventListeners() {
 
 document.addEventListener('DOMContentLoaded', () => {
     initializeEventListeners();
+    // Show the last known state right away (still read-only); loadData
+    // replaces it with fresh data, or keeps it and shows the offline banner.
+    // Without this the page stays blank until a hanging request times out.
+    const snap = readSnapshot();
+    if (snap) {
+        allData = snap.doc;
+        normalizeData();
+        renderAll();
+    }
     loadData();
+
+    window.addEventListener('online', refreshFromServer);
+    window.addEventListener('pageshow', e => { if (e.persisted) refreshFromServer(); });
+    document.addEventListener('visibilitychange', refreshFromServer);
+
+    // The service worker keeps the last page for offline use (src/sw.js). It
+    // needs a secure context, so plain http://<ip>:8080 simply goes without.
+    if ('serviceWorker' in navigator && window.isSecureContext) {
+        navigator.serviceWorker.register('/sw.js').catch(e => console.warn('Service Worker:', e));
+    }
 });

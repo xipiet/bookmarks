@@ -18,6 +18,12 @@ const BACKUP_KEEP = 100;
 const EMPTY_DOC = { categories: [], tools: [], bookmarks: [] };
 
 app.disable('x-powered-by');
+// Marks every response as coming from this app. The service worker and the
+// client use it to tell a real answer from a proxy or Cloudflare error page.
+app.use((req, res, next) => {
+  res.set('X-Bookmarks-App', '1');
+  next();
+});
 app.use(express.json({ limit: '5mb' }));
 // Only the frontend sources are public, never the app directory itself
 // (data files, server code, .git, node_modules).
@@ -26,11 +32,21 @@ app.get('/bookmarks.example.json', (req, res) => {
   res.sendFile(path.join(ROOT, 'bookmarks.example.json'));
 });
 
-// Serve the main page with CSS, JS and logo inlined, so a browser "Save Page
-// As" yields a single self-contained .html that still renders offline (file://)
-// regardless of the chosen save mode. The source files stay separate on disk
-// (the dev workflow is unaffected) — they are only stitched together here, read
-// fresh on every request so edits are still picked up on refresh.
+// Service worker (offline copy of the page, see src/sw.js). Served from the
+// root so its scope covers "/", and never cached so changes arrive right away.
+app.get('/sw.js', (req, res) => {
+  res.sendFile(path.join(ROOT, 'src', 'sw.js'), {
+    cacheControl: false,
+    headers: { 'Cache-Control': 'no-cache' },
+  });
+});
+
+// Serve the main page with CSS, JS and logo inlined, so the whole app is one
+// self-contained response: the service worker caches exactly this as the
+// offline copy, which can never mix files from different versions. The source
+// files stay separate on disk (the dev workflow is unaffected) — they are only
+// stitched together here, read fresh on every request so edits are still
+// picked up on refresh.
 app.get('/', (req, res) => {
   try {
     let html = fs.readFileSync(path.join(ROOT, 'src', 'index.html'), 'utf8');
@@ -66,6 +82,7 @@ app.get('/', (req, res) => {
       );
     }
 
+    res.set('Cache-Control', 'no-cache');
     res.type('html').send(html);
   } catch (error) {
     console.error('Error rendering index:', error);
@@ -230,6 +247,7 @@ function writeDoc(doc) {
 
 app.get('/api/bookmarks', (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store');
     res.json(readDoc());
   } catch (error) {
     console.error('Error reading bookmarks:', error);
