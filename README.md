@@ -41,15 +41,17 @@ Einstellbar per Umgebungsvariable:
 
 URLs ohne `http(s)://` (z. B. `github.com`) werden automatisch mit `https://` ergänzt.
 
+**Icons:** Der Server holt das Icon jeder gebookmarkten Seite selbst (`<link rel="icon">` der Startseite, sonst `/favicon.ico`, nur notfalls DuckDuckGo) und legt es in `favicons/` im Datenordner ab. Gefundene Icons werden monatlich erneuert, fehlende wöchentlich neu versucht. Der Browser fragt also keine fremden Dienste mehr, auch interne Seiten bekommen ihr echtes Icon, und offline sind die Icons da.
+
 **Backups:** Vor jeder Änderung (auch vor Import und Zurücksetzen) landet der bisherige Stand in `backups/bookmarks-<Zeitstempel>.json`. Die letzten 100 bleiben erhalten. Wiederherstellen: die gewünschte Datei auf dem Server als `bookmarks.json` zurückkopieren, oder herunterladen und über „JSON importieren“ laden.
 
 **Mehrere Geräte:** Speichert ein Gerät, während auf einem anderen noch der alte Stand offen ist, lehnt der Server das Speichern des alten Stands ab (HTTP 409). Die Seite meldet das und lädt den aktuellen Stand neu, statt die Änderung des anderen Geräts zu überschreiben. Beim Zurückwechseln in den Tab lädt die Seite ohnehin neu.
 
 ## Offline
 
-Ohne Verbindung zum Server zeigt die Seite den zuletzt geladenen Stand, unten links steht klein z. B. „Offline · Stand 25.10., 21:31 · 525“ (Grund: HTTP-Status, „keine Verbindung“ oder „Zeitüberschreitung“, Details im Tooltip). Bearbeiten ist dann gesperrt. Sobald der Server wieder erreichbar ist, lädt die Seite selbst neu, ein Klick auf den Hinweis versucht es sofort.
+Ohne Verbindung zum Server zeigt die Seite den zuletzt geladenen Stand samt Icons, unten links steht klein „Offline“, bei einer Fehlerseite mit HTTP-Status (z. B. „Offline · 525“, unterwegs ohne VPN). Stand und Grund stehen im Tooltip. Bearbeiten ist dann gesperrt. Sobald der Server wieder erreichbar ist, lädt die Seite selbst neu, ein Klick auf den Hinweis versucht es sofort.
 
-- Ein Service Worker (`src/sw.js`) hält eine Kopie der Seite vor: zuerst Netz, nach 3 s oder bei einer Antwort, die nicht von diesem Server kommt (z. B. eine Fehlerseite von Cloudflare oder dem Reverse Proxy), die Kopie. Den letzten Datenstand merkt sich die Seite selbst im `localStorage`.
+- Ein Service Worker (`src/sw.js`) hält eine Kopie der Seite vor: zuerst Netz, nach 3 s oder bei einer Antwort, die nicht von diesem Server kommt (z. B. eine Fehlerseite von Cloudflare oder dem Reverse Proxy), die Kopie. Die Icons speichert er ebenfalls. Den letzten Datenstand merkt sich die Seite selbst im `localStorage`.
 - Service Worker laufen nur über **HTTPS** (oder `localhost`). Über `http://<IP>:8080` funktioniert die Seite normal, aber ohne Offline-Modus.
 - Im Reverse Proxy darf die Seite **nicht zwischengespeichert** werden (bei Nginx Proxy Manager: „Cache Assets“ aus).
 - iPhone: die Seite als Web-App auf den Home-Bildschirm legen. In einem normalen Safari-Tab löscht iOS den Offline-Stand, wenn die Seite 7 Tage nicht genutzt wurde.
@@ -65,6 +67,7 @@ Wenn du programmatisch zugreifen willst:
 | `POST` | `/api/bookmarks` | Save (von der UI bei jeder Änderung). `_meta.updatedAt` muss dem gespeicherten Stand entsprechen, sonst `409` |
 | `POST` | `/api/bookmarks/import` | komplettes Dokument ersetzen, ohne Konfliktprüfung |
 | `GET` | `/api/bookmarks/export` | Download mit Datums-Dateinamen |
+| `GET` | `/favicon?url=<Origin>` | Icon einer gebookmarkten Seite (selbst geholt und gespeichert), sonst `404` |
 | `GET` | `/logo` | aktuelles Logo (User-Overlay vor Default) |
 | `POST` | `/api/logo` | Logo-Upload (`Content-Type: image/{png,svg+xml,webp,jpeg}`, raw body) |
 | `DELETE` | `/api/logo` | User-Logo-Overlay entfernen |

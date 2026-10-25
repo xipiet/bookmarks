@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -176,6 +177,184 @@ app.delete('/api/logo', (req, res) => {
   } catch (error) {
     console.error('Error removing logo:', error);
     res.status(500).json({ error: 'Failed to remove logo: ' + error.message });
+  }
+});
+
+// --- favicons -----------------------------------------------------------------
+//
+// GET /favicon?url=<origin> returns the icon of a bookmarked site. The server
+// fetches it once itself — <link rel="icon"> on the site's start page, then
+// /favicon.ico, DuckDuckGo only as a last resort — and keeps it in
+// DATA_DIR/favicons. Same-origin icons can be cached by the service worker
+// (offline), internal hosts get their real icon, and the browser no longer
+// sends every bookmarked hostname to a third party on each page load.
+
+const FAVICON_DIR = path.join(DATA_DIR, 'favicons');
+const FAVICON_REFRESH_MS = 30 * 24 * 3600 * 1000; // re-fetch found icons monthly
+const FAVICON_RETRY_MS = 7 * 24 * 3600 * 1000;    // retry missing ones weekly
+const FAVICON_MAX_BYTES = 200 * 1024;
+const FAVICON_TIMEOUT_MS = 5000;
+const FAVICON_HTML_BYTES = 512 * 1024;
+const FETCH_HEADERS = {
+  // Some sites refuse requests without a browser-like user agent.
+  'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0',
+  'Accept': 'text/html,image/*;q=0.9,*/*;q=0.8',
+};
+const faviconJobs = new Map(); // origin -> running fetch, so parallel requests share it
+
+// Origins that occur in the bookmarks. Only these are fetched: the endpoint
+// must not turn into an open proxy or fill the disk with arbitrary hosts.
+function bookmarkedOrigins() {
+  const origins = new Set();
+  let doc;
+  try { doc = readDoc(); } catch { return origins; }
+  const add = (link) => { try { origins.add(new URL(link.url).origin); } catch {} };
+  for (const group of [...doc.categories, ...doc.tools]) (group.links || []).forEach(add);
+  doc.bookmarks.forEach(add);
+  return origins;
+}
+
+// Reads at most maxBytes of a response body. Returns null if it is longer,
+// unless truncate is set (enough for the <head> of an HTML page).
+async function readLimited(response, maxBytes, truncate) {
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > maxBytes) {
+      await reader.cancel();
+      if (!truncate) return null;
+      chunks.push(value.subarray(0, value.length - (size - maxBytes)));
+      break;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
+// The image type from the file's first bytes. The Content-Type header can't
+// be trusted: many sites answer /favicon.ico with their HTML page.
+function sniffImageType(buf) {
+  if (buf.length >= 8 && buf.readUInt32BE(0) === 0x89504e47) return 'image/png';
+  if (buf.length >= 4 && buf.readUInt32BE(0) === 0x00000100) return 'image/x-icon';
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.length >= 4 && buf.toString('latin1', 0, 4) === 'GIF8') return 'image/gif';
+  if (buf.length >= 12 && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  const head = buf.toString('utf8', 0, Math.min(buf.length, 1024)).trimStart().toLowerCase();
+  if (/^(<\?xml|<!--|<svg)/.test(head) && head.includes('<svg')) return 'image/svg+xml';
+  return null;
+}
+
+// hrefs of <link rel="icon"> / "shortcut icon", then apple-touch-icon.
+function iconLinks(html) {
+  const icons = [];
+  const touchIcons = [];
+  for (const tag of html.match(/<link\b[^>]*>/gi) || []) {
+    const attrs = {};
+    for (const m of tag.matchAll(/([a-z][a-z0-9-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi)) {
+      attrs[m[1].toLowerCase()] = m[2] ?? m[3] ?? m[4];
+    }
+    if (!attrs.href) continue;
+    const rel = (attrs.rel || '').toLowerCase().split(/\s+/);
+    const href = attrs.href.replace(/&amp;/g, '&');
+    if (rel.includes('icon')) icons.push(href);
+    else if (rel.some((r) => r.startsWith('apple-touch-icon'))) touchIcons.push(href);
+  }
+  return [...icons, ...touchIcons];
+}
+
+async function fetchImage(url) {
+  const response = await fetch(url, { headers: FETCH_HEADERS, signal: AbortSignal.timeout(FAVICON_TIMEOUT_MS) });
+  if (!response.ok) return null;
+  const data = await readLimited(response, FAVICON_MAX_BYTES, false);
+  const mime = data && data.length > 0 && sniffImageType(data);
+  return mime ? { mime, data } : null;
+}
+
+async function fetchFavicon(origin) {
+  const candidates = [];
+  try {
+    const response = await fetch(origin + '/', { headers: FETCH_HEADERS, signal: AbortSignal.timeout(FAVICON_TIMEOUT_MS) });
+    const html = await readLimited(response, FAVICON_HTML_BYTES, true);
+    for (const href of iconLinks(html.toString('utf8')).slice(0, 4)) {
+      try { candidates.push(new URL(href, response.url).href); } catch {}
+    }
+  } catch {}
+  candidates.push(origin + '/favicon.ico');
+  // Last resort for public sites that block bots. Pointless for IP addresses
+  // and single-label names, which a third party can't reach anyway.
+  const host = new URL(origin).hostname;
+  if (host.includes('.') && !/^[\d.]+$/.test(host) && !host.startsWith('[')) {
+    candidates.push('https://icons.duckduckgo.com/ip3/' + host + '.ico');
+  }
+  for (const url of [...new Set(candidates)]) {
+    try {
+      const icon = await fetchImage(url);
+      if (icon) return icon;
+    } catch {}
+  }
+  return null;
+}
+
+function faviconFiles(origin) {
+  const id = crypto.createHash('sha1').update(origin).digest('hex');
+  return { meta: path.join(FAVICON_DIR, id + '.json'), data: path.join(FAVICON_DIR, id + '.bin') };
+}
+
+function readFaviconMeta(files) {
+  try { return JSON.parse(fs.readFileSync(files.meta, 'utf8')); } catch { return null; }
+}
+
+// Fetches and stores the icon. A failed refresh keeps an existing icon.
+async function refreshFavicon(origin) {
+  const files = faviconFiles(origin);
+  const old = readFaviconMeta(files);
+  const icon = await fetchFavicon(origin);
+  fs.mkdirSync(FAVICON_DIR, { recursive: true });
+  if (icon) fs.writeFileSync(files.data, icon.data);
+  const mime = icon ? icon.mime : (old && old.mime) || null;
+  fs.writeFileSync(files.meta, JSON.stringify({ origin, mime, fetchedAt: Date.now() }));
+}
+
+async function getFavicon(origin) {
+  const files = faviconFiles(origin);
+  let meta = readFaviconMeta(files);
+  const maxAge = meta && meta.mime ? FAVICON_REFRESH_MS : FAVICON_RETRY_MS;
+  if (!meta || Date.now() - meta.fetchedAt > maxAge) {
+    if (!faviconJobs.has(origin)) {
+      faviconJobs.set(origin, refreshFavicon(origin).finally(() => faviconJobs.delete(origin)));
+    }
+    await faviconJobs.get(origin);
+    meta = readFaviconMeta(files);
+  }
+  if (!meta || !meta.mime) return null;
+  return { mime: meta.mime, data: fs.readFileSync(files.data) };
+}
+
+app.get('/favicon', async (req, res) => {
+  let origin;
+  try {
+    const url = new URL(String(req.query.url || ''));
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('scheme');
+    origin = url.origin;
+  } catch {
+    return res.status(400).end();
+  }
+  if (!bookmarkedOrigins().has(origin)) return res.status(404).end();
+  try {
+    const icon = await getFavicon(origin);
+    if (!icon) return res.status(404).end();
+    res.set('Cache-Control', 'public, max-age=86400');
+    // An SVG opened directly must not run scripts in this origin.
+    res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.type(icon.mime).send(icon.data);
+  } catch (error) {
+    console.error('Error serving favicon for ' + origin + ':', error);
+    res.status(500).end();
   }
 });
 

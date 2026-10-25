@@ -18,18 +18,19 @@ function safeHref(url) {
     return '#';
 }
 
-function getDomainFromUrl(url) {
-    try { return new URL(url).hostname; } catch { return null; }
-}
-
+// Icons come from our own server (/favicon, see server.js), which fetches and
+// keeps them; the service worker caches them for offline use. A missing icon
+// just leaves the 16px slot empty (alt="").
 function faviconImg(url) {
-    const domain = getDomainFromUrl(url);
-    // Plain hostnames only. The domain ends up inside a JS string in the
-    // onerror attribute, where the HTML parser undoes escapeHtml — a host like
-    // x'-alert(1)-' (valid for the URL parser) would otherwise run as code.
-    if (!domain || !/^[a-z0-9.-]+$/i.test(domain)) return '';
-    return '<img src="https://icons.duckduckgo.com/ip3/' + domain + '.ico" alt="" class="favicon" ' +
-           'onerror="this.onerror=null;this.src=\'https://www.google.com/s2/favicons?domain=' + domain + '&sz=32\'"/>';
+    let origin;
+    try {
+        const u = new URL(url);
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+        origin = u.origin;
+    } catch {
+        return '';
+    }
+    return '<img src="/favicon?url=' + encodeURIComponent(origin) + '" alt="" class="favicon">';
 }
 
 // A category is "collapsed" if it renders as a clickable tile that opens a
