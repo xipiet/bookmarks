@@ -318,32 +318,28 @@ h1 {
     flex-shrink: 0;
 }
 
-/* Offline notice (app.js renderBanner). Fixed at the top and above the
-   modals, so it stays visible wherever the user is. */
+/* Offline hint (app.js renderBanner): small and muted in the bottom left
+   corner (the "+" button sits bottom right). A click retries. */
 .offline-banner {
     position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 1001;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: center;
-    gap: 6px 14px;
-    padding: 8px 16px;
-    background: #2e2410;
-    border-bottom: 1px solid #a8741a;
-    color: #ffd99a;
-    font-size: 0.9em;
+    left: 20px;
+    bottom: 16px;
+    z-index: 998;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: rgba(20, 20, 20, 0.85);
+    color: #777;
+    font-size: 0.75em;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.offline-banner:hover {
+    color: #bbb;
 }
 
 .offline-banner[hidden] {
     display: none;
-}
-
-.offline-reason {
-    color: #c9a56a;
 }
 
 .logo {

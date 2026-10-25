@@ -47,7 +47,7 @@ URLs ohne `http(s)://` (z. B. `github.com`) werden automatisch mit `https://` er
 
 ## Offline
 
-Ohne Verbindung zum Server zeigt die Seite den zuletzt geladenen Stand mit dem Hinweis „Offline · Stand vom … · nur lesen“. Bearbeiten ist dann gesperrt. Sobald der Server wieder erreichbar ist, lädt die Seite selbst neu (oder per „Erneut versuchen“).
+Ohne Verbindung zum Server zeigt die Seite den zuletzt geladenen Stand, unten links steht klein z. B. „Offline · Stand 25.10., 21:31 · 525“ (Grund: HTTP-Status, „keine Verbindung“ oder „Zeitüberschreitung“, Details im Tooltip). Bearbeiten ist dann gesperrt. Sobald der Server wieder erreichbar ist, lädt die Seite selbst neu, ein Klick auf den Hinweis versucht es sofort.
 
 - Ein Service Worker (`src/sw.js`) hält eine Kopie der Seite vor: zuerst Netz, nach 3 s oder bei einer Antwort, die nicht von diesem Server kommt (z. B. eine Fehlerseite von Cloudflare oder dem Reverse Proxy), die Kopie. Den letzten Datenstand merkt sich die Seite selbst im `localStorage`.
 - Service Worker laufen nur über **HTTPS** (oder `localhost`). Über `http://<IP>:8080` funktioniert die Seite normal, aber ohne Offline-Modus.

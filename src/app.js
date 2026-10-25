@@ -73,6 +73,14 @@ async function fetchWithTimeout(url, options, ms) {
     }
 }
 
+// Error with an extra short label for the offline hint (e.g. "525"); the full
+// message goes into the hint's tooltip.
+function labeledError(message, short) {
+    const error = new Error(message);
+    error.short = short;
+    return error;
+}
+
 // Only a 2xx that carries the app's marker header counts as an answer from
 // this server. Outside the LAN without VPN the name resolves to Cloudflare,
 // which replies with its own error page (HTTP 525), not a network error.
@@ -80,10 +88,10 @@ async function fetchDoc() {
     const response = await fetchWithTimeout('/api/bookmarks', { cache: 'no-store' }, LOAD_TIMEOUT_MS);
     if (!response.ok) {
         const hint = response.status >= 520 && response.status < 530 ? ', VPN aus?' : '';
-        throw new Error('Server nicht erreichbar (HTTP ' + response.status + hint + ')');
+        throw labeledError('Server nicht erreichbar (HTTP ' + response.status + hint + ')', String(response.status));
     }
     if (response.headers.get('X-Bookmarks-App') !== '1') {
-        throw new Error('Unerwartete Antwort, nicht vom Bookmarks-Server');
+        throw labeledError('Unerwartete Antwort, nicht vom Bookmarks-Server', 'fremde Antwort');
     }
     return response.json();
 }
@@ -122,7 +130,7 @@ async function loadFromServer() {
         doc = await fetchDoc();
     } catch (error) {
         console.error('Error loading bookmarks:', error);
-        showOffline(error.message);
+        showOffline(error);
         return;
     }
     allData = doc;
@@ -172,12 +180,12 @@ function renderSnapshot(snap) {
 
 // Server out of reach: show the last confirmed state read-only (or an error if
 // this device has none yet) and keep retrying in the background.
-function showOffline(reason) {
+function showOffline(error) {
     editable = false;
     const snap = readSnapshot();
-    if (!snap) renderError('Konnte Bookmarks nicht laden: ' + reason);
+    if (!snap) renderError('Konnte Bookmarks nicht laden: ' + error.message);
     else if (snap.at !== shownSnapshotAt) renderSnapshot(snap);
-    renderBanner(snap && snap.at, reason);
+    renderBanner(snap && snap.at, error);
     scheduleRetry();
 }
 
@@ -200,20 +208,20 @@ function scheduleRetry() {
     }, delay);
 }
 
-function renderBanner(snapshotAt, reason) {
+// Small hint in the bottom left corner, e.g. "Offline · Stand 25.10., 21:31 · 525".
+// Details in the tooltip; a click retries right away.
+function renderBanner(snapshotAt, error) {
     const banner = document.getElementById('offlineBanner');
     if (editable) {
         banner.hidden = true;
         return;
     }
     const when = snapshotAt
-        ? new Date(snapshotAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })
+        ? new Date(snapshotAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
         : null;
-    banner.innerHTML = '<span><strong>Offline</strong>'
-        + (when ? ' · Stand vom ' + escapeHtml(when) + ' · nur lesen' : '') + '</span>'
-        + '<span class="offline-reason">' + escapeHtml(reason) + '</span>'
-        + '<button type="button" class="btn btn-sm" id="retryBtn">Erneut versuchen</button>';
-    document.getElementById('retryBtn').onclick = () => loadData();
+    banner.textContent = ['Offline', when && 'Stand ' + when, error.short || error.message].filter(Boolean).join(' · ');
+    banner.title = error.message + '. Nur lesen, Klick versucht es erneut.';
+    banner.onclick = () => loadData();
     banner.hidden = false;
 }
 
