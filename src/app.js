@@ -73,14 +73,6 @@ async function fetchWithTimeout(url, options, ms) {
     }
 }
 
-// Error with an extra short label for the offline hint (e.g. "525"); the full
-// message goes into the hint's tooltip.
-function labeledError(message, short) {
-    const error = new Error(message);
-    error.short = short;
-    return error;
-}
-
 // Only a 2xx that carries the app's marker header counts as an answer from
 // this server. Outside the LAN without VPN the name resolves to Cloudflare,
 // which replies with its own error page (HTTP 525), not a network error.
@@ -88,10 +80,12 @@ async function fetchDoc() {
     const response = await fetchWithTimeout('/api/bookmarks', { cache: 'no-store' }, LOAD_TIMEOUT_MS);
     if (!response.ok) {
         const hint = response.status >= 520 && response.status < 530 ? ', VPN aus?' : '';
-        throw labeledError('Server nicht erreichbar (HTTP ' + response.status + hint + ')', String(response.status));
+        const error = new Error('Server nicht erreichbar (HTTP ' + response.status + hint + ')');
+        error.status = response.status; // shown next to "Offline", e.g. 525
+        throw error;
     }
     if (response.headers.get('X-Bookmarks-App') !== '1') {
-        throw labeledError('Unerwartete Antwort, nicht vom Bookmarks-Server', 'fremde Antwort');
+        throw new Error('Unerwartete Antwort, nicht vom Bookmarks-Server');
     }
     return response.json();
 }
@@ -208,7 +202,8 @@ function scheduleRetry() {
     }, delay);
 }
 
-// Small hint in the bottom left corner, e.g. "Offline · Stand 25.10., 21:31 · 525".
+// Small hint in the bottom left corner: "Offline", plus the HTTP status if the
+// answer was an error page (e.g. "Offline · 525" outside without VPN).
 // Details in the tooltip; a click retries right away.
 function renderBanner(snapshotAt, error) {
     const banner = document.getElementById('offlineBanner');
@@ -217,10 +212,10 @@ function renderBanner(snapshotAt, error) {
         return;
     }
     const when = snapshotAt
-        ? new Date(snapshotAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+        ? new Date(snapshotAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })
         : null;
-    banner.textContent = ['Offline', when && 'Stand ' + when, error.short || error.message].filter(Boolean).join(' · ');
-    banner.title = error.message + '. Nur lesen, Klick versucht es erneut.';
+    banner.textContent = 'Offline' + (error.status ? ' · ' + error.status : '');
+    banner.title = (when ? 'Stand vom ' + when + '. ' : '') + error.message + '. Nur lesen, Klick versucht es erneut.';
     banner.onclick = () => loadData();
     banner.hidden = false;
 }
