@@ -1,20 +1,30 @@
 const express = require('express');
-const bodyParser = require('body-parser');
 const fs = require('fs');
 const path = require('path');
 
 const app = express();
-const PORT = 8080;
+const PORT = parseInt(process.env.PORT, 10) || 8080;
+const HOST = process.env.HOST || '0.0.0.0';
 
 const ROOT = __dirname;
-const bookmarksFile = path.join(ROOT, 'bookmarks.json');
-const BACKUP_DIR = path.join(ROOT, 'backups');
+// Per-instance data (bookmarks.json, backups/, uploaded logo). Defaults to the
+// app directory for `npm start`; a deployment points it elsewhere so that a
+// redeploy or `git clean` can never touch the data.
+const DATA_DIR = path.resolve(process.env.DATA_DIR || ROOT);
+const bookmarksFile = path.join(DATA_DIR, 'bookmarks.json');
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const BACKUP_KEEP = 100;
 
 const EMPTY_DOC = { categories: [], tools: [], bookmarks: [] };
 
-app.use(bodyParser.json({ limit: '5mb' }));
-app.use(express.static(ROOT));
+app.disable('x-powered-by');
+app.use(express.json({ limit: '5mb' }));
+// Only the frontend sources are public, never the app directory itself
+// (data files, server code, .git, node_modules).
+app.use('/src', express.static(path.join(ROOT, 'src')));
+app.get('/bookmarks.example.json', (req, res) => {
+  res.sendFile(path.join(ROOT, 'bookmarks.example.json'));
+});
 
 // Serve the main page with CSS, JS and logo inlined, so a browser "Save Page
 // As" yields a single self-contained .html that still renders offline (file://)
@@ -27,10 +37,13 @@ app.get('/', (req, res) => {
     const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
     const js = fs.readFileSync(path.join(ROOT, 'src', 'app.js'), 'utf8');
 
+    // The replacements are passed as functions: a plain replacement string
+    // would interpret "$&", "$'" etc. inside the CSS/JS and silently mangle it.
+
     // Inline the stylesheet. Escaping </style guards against a breakout.
     html = html.replace(
       '<link rel="stylesheet" href="/src/styles.css">',
-      '<style>\n' + css.replace(/<\/style/gi, '<\\/style') + '\n</style>'
+      () => '<style>\n' + css.replace(/<\/style/gi, '<\\/style') + '\n</style>'
     );
 
     // Inline the script. Must stay a CLASSIC script (not a module) so the
@@ -38,7 +51,7 @@ app.get('/', (req, res) => {
     // against a breakout.
     html = html.replace(
       '<script src="/src/app.js"></script>',
-      '<script>\n' + js.replace(/<\/script/gi, '<\\/script') + '\n</script>'
+      () => '<script>\n' + js.replace(/<\/script/gi, '<\\/script') + '\n</script>'
     );
 
     // Inline the logo as a data URI for both the favicon and the header image,
@@ -46,10 +59,10 @@ app.get('/', (req, res) => {
     // app.js's own "/logo" reference (settings preview) untouched.
     const logo = logoDataUri();
     if (logo) {
-      html = html.replace('<link rel="icon" href="/logo">', '<link rel="icon" href="' + logo + '">');
+      html = html.replace('<link rel="icon" href="/logo">', () => '<link rel="icon" href="' + logo + '">');
       html = html.replace(
         '<img src="/logo" alt="Logo" class="logo" id="pageLogo">',
-        '<img src="' + logo + '" alt="Logo" class="logo" id="pageLogo">'
+        () => '<img src="' + logo + '" alt="Logo" class="logo" id="pageLogo">'
       );
     }
 
@@ -60,8 +73,9 @@ app.get('/', (req, res) => {
   }
 });
 
-// Logo route: prefers a user-uploaded logo.user.* (overlay, gitignored)
-// over the committed default logo.png. Used by both <img> and <link rel="icon">.
+// Logo route: prefers a user-uploaded logo.user.* (overlay in DATA_DIR,
+// gitignored) over the committed default logo.png. Used by both <img> and
+// <link rel="icon">.
 const LOGO_USER_CANDIDATES = [
   ['logo.user.png', 'image/png'],
   ['logo.user.svg', 'image/svg+xml'],
@@ -74,28 +88,28 @@ const LOGO_DEFAULTS = [
   ['logo.svg', 'image/svg+xml'],
 ];
 
-// Resolve the active logo (user overlay first, then committed default) to a
-// base64 data: URI for inlining into the served page. Null if none exists.
+// The active logo as [absolute path, mime], or null if none exists.
+function activeLogo() {
+  const candidates = [
+    ...LOGO_USER_CANDIDATES.map(([name, mime]) => [path.join(DATA_DIR, name), mime]),
+    ...LOGO_DEFAULTS.map(([name, mime]) => [path.join(ROOT, name), mime]),
+  ];
+  return candidates.find(([p]) => fs.existsSync(p)) || null;
+}
+
+// The active logo as a base64 data: URI for inlining into the served page.
 function logoDataUri() {
-  for (const [name, mime] of [...LOGO_USER_CANDIDATES, ...LOGO_DEFAULTS]) {
-    const p = path.join(ROOT, name);
-    if (fs.existsSync(p)) {
-      return 'data:' + mime + ';base64,' + fs.readFileSync(p).toString('base64');
-    }
-  }
-  return null;
+  const logo = activeLogo();
+  if (!logo) return null;
+  return 'data:' + logo[1] + ';base64,' + fs.readFileSync(logo[0]).toString('base64');
 }
 
 app.get('/logo', (req, res) => {
-  for (const [name, mime] of [...LOGO_USER_CANDIDATES, ...LOGO_DEFAULTS]) {
-    const p = path.join(ROOT, name);
-    if (fs.existsSync(p)) {
-      res.set('Cache-Control', 'no-cache');
-      res.type(mime);
-      return res.sendFile(p);
-    }
-  }
-  res.status(404).send('No logo');
+  const logo = activeLogo();
+  if (!logo) return res.status(404).send('No logo');
+  res.set('Cache-Control', 'no-cache');
+  res.type(logo[1]);
+  res.sendFile(logo[0]);
 });
 
 // Logo upload: writes the raw request body as logo.user.<ext>. Used by the
@@ -121,10 +135,10 @@ app.post(
       }
       // Remove all previously uploaded user logos (one per extension).
       for (const [name] of LOGO_USER_CANDIDATES) {
-        const p = path.join(ROOT, name);
+        const p = path.join(DATA_DIR, name);
         if (fs.existsSync(p)) fs.unlinkSync(p);
       }
-      fs.writeFileSync(path.join(ROOT, 'logo.user.' + ext), req.body);
+      fs.writeFileSync(path.join(DATA_DIR, 'logo.user.' + ext), req.body);
       res.json({ success: true, ext });
     } catch (error) {
       console.error('Error saving logo:', error);
@@ -135,12 +149,17 @@ app.post(
 
 // Reset the user logo overlay — falls back to the committed default.
 app.delete('/api/logo', (req, res) => {
-  let removed = 0;
-  for (const [name] of LOGO_USER_CANDIDATES) {
-    const p = path.join(ROOT, name);
-    if (fs.existsSync(p)) { fs.unlinkSync(p); removed++; }
+  try {
+    let removed = 0;
+    for (const [name] of LOGO_USER_CANDIDATES) {
+      const p = path.join(DATA_DIR, name);
+      if (fs.existsSync(p)) { fs.unlinkSync(p); removed++; }
+    }
+    res.json({ success: true, removed });
+  } catch (error) {
+    console.error('Error removing logo:', error);
+    res.status(500).json({ error: 'Failed to remove logo: ' + error.message });
   }
-  res.json({ success: true, removed });
 });
 
 function readDoc() {
@@ -290,11 +309,13 @@ app.get('/api/bookmarks/export', (req, res) => {
     return res.status(404).json({ error: 'No bookmarks to export' });
   }
   const today = new Date().toISOString().slice(0, 10);
-  res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Content-Disposition', `attachment; filename="bookmarks-${today}.json"`);
-  fs.createReadStream(bookmarksFile).pipe(res);
+  res.download(bookmarksFile, `bookmarks-${today}.json`, (error) => {
+    if (!error) return;
+    console.error('Error exporting bookmarks:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to export bookmarks' });
+  });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Bookmarks server running at http://0.0.0.0:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Bookmarks server running at http://${HOST}:${PORT} (data: ${DATA_DIR})`);
 });
