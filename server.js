@@ -8,7 +8,8 @@ const PORT = 8080;
 
 const ROOT = __dirname;
 const bookmarksFile = path.join(ROOT, 'bookmarks.json');
-const backupFile = path.join(ROOT, 'bookmarks.backup.json');
+const BACKUP_DIR = path.join(ROOT, 'backups');
+const BACKUP_KEEP = 100;
 
 const EMPTY_DOC = { categories: [], tools: [], bookmarks: [] };
 
@@ -171,8 +172,41 @@ function validateDoc(body) {
   return null;
 }
 
+// Copy the current file into backups/ before it gets replaced, keeping the
+// newest BACKUP_KEEP. A file that doesn't parse is skipped so a broken
+// bookmarks.json can never rotate the good backups away.
+function backupCurrent() {
+  if (!fs.existsSync(bookmarksFile)) return;
+  const raw = fs.readFileSync(bookmarksFile, 'utf8');
+  try { JSON.parse(raw); } catch { return; }
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  fs.writeFileSync(path.join(BACKUP_DIR, 'bookmarks-' + stamp + '.json'), raw);
+  const all = fs.readdirSync(BACKUP_DIR).filter((f) => /^bookmarks-.+\.json$/.test(f)).sort();
+  for (const f of all.slice(0, Math.max(0, all.length - BACKUP_KEEP))) {
+    fs.unlinkSync(path.join(BACKUP_DIR, f));
+  }
+}
+
+// Atomic replace: write a temp file, flush it to disk, then rename over the
+// original. A crash or full disk mid-write leaves the old file intact instead
+// of a truncated one.
 function writeDoc(doc) {
-  fs.writeFileSync(bookmarksFile, JSON.stringify(doc, null, 2), 'utf8');
+  backupCurrent();
+  const tmp = bookmarksFile + '.tmp';
+  try {
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      fs.writeSync(fd, JSON.stringify(doc, null, 2));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, bookmarksFile);
+  } catch (error) {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw error;
+  }
 }
 
 app.get('/api/bookmarks', (req, res) => {
@@ -186,6 +220,10 @@ app.get('/api/bookmarks', (req, res) => {
 
 // Save (mutation from the running UI). Preserves _meta from the previous file
 // unless the client explicitly sends a new one.
+//
+// Conflict check: the client sends back the _meta.updatedAt it last loaded.
+// If the file has moved on since (another device or tab saved in between),
+// the save is refused with 409 instead of silently overwriting that change.
 app.post('/api/bookmarks', (req, res) => {
   try {
     const err = validateDoc(req.body);
@@ -194,6 +232,10 @@ app.post('/api/bookmarks', (req, res) => {
     let prevMeta = {};
     if (fs.existsSync(bookmarksFile)) {
       try { prevMeta = (JSON.parse(fs.readFileSync(bookmarksFile, 'utf8'))._meta) || {}; } catch {}
+    }
+    const base = req.body._meta && req.body._meta.updatedAt;
+    if (prevMeta.updatedAt && base !== prevMeta.updatedAt) {
+      return res.status(409).json({ error: 'Inzwischen woanders geändert', conflict: true });
     }
     const _meta = {
       ...prevMeta,
@@ -215,16 +257,12 @@ app.post('/api/bookmarks', (req, res) => {
   }
 });
 
-// Import a full document from an uploaded JSON file. Stricter validation,
-// backs up the previous file before overwriting.
+// Import a full document from an uploaded JSON file. Replaces everything on
+// purpose, so there is no conflict check; writeDoc backs up the old file.
 app.post('/api/bookmarks/import', (req, res) => {
   try {
     const err = validateDoc(req.body);
     if (err) return res.status(400).json({ error: err });
-
-    if (fs.existsSync(bookmarksFile)) {
-      fs.copyFileSync(bookmarksFile, backupFile);
-    }
 
     const _meta = {
       filename: (req.body._meta && typeof req.body._meta.filename === 'string')

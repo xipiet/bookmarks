@@ -1,5 +1,10 @@
 let allData = { categories: [], tools: [], bookmarks: [], _meta: {} };
 
+// True only while allData mirrors what the server last confirmed. Before the
+// first successful load (or after a failed one) nothing may be saved, or the
+// near-empty default above would overwrite the real file.
+let editable = false;
+
 // --- safety helpers ---------------------------------------------------------
 
 const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -90,10 +95,11 @@ async function loadData() {
         return;
     }
     try {
-        const response = await fetch('/api/bookmarks');
+        const response = await fetch('/api/bookmarks', { cache: 'no-store' });
         if (!response.ok) throw new Error('HTTP ' + response.status);
         allData = await response.json();
         normalizeData();
+        editable = true;
 
         // Legacy migration: the old schema had a separate `tools` array for
         // categories that should render as clickable tiles. The `collapsed`
@@ -108,19 +114,27 @@ async function loadData() {
             }));
             allData.categories = [...allData.categories, ...migrated];
             allData.tools = [];
-            await saveData();
-            return; // saveData re-renders
+            renderAll();
+            // Not awaited: loadData also runs as the reload inside a failed
+            // save, and waiting there for the save queue would deadlock. If it
+            // doesn't persist now, the next load simply migrates again.
+            saveData();
+            return;
         }
 
         renderAll();
     } catch (error) {
         console.error('Error loading bookmarks:', error);
+        editable = false;
         // Server unreachable: fall back to an embedded snapshot if the page
         // carries one (e.g. a saved copy opened over a non-file:// URL).
         if (loadEmbeddedData()) { renderAll(); return; }
         renderError('Konnte Bookmarks nicht laden: ' + error.message);
     }
 }
+
+let savePromise = null;
+let saveAgain = false;
 
 async function saveData() {
     // In der lokalen Kopie gibt es keinen Server: Änderungen bleiben nur im
@@ -129,23 +143,76 @@ async function saveData() {
         renderAll();
         return;
     }
+    if (!requireEditable()) return false;
+    // One request at a time: a change made while a save is in flight is sent
+    // afterwards (with the then-current state), so an older request can never
+    // land after a newer one. Callers get a promise that resolves once their
+    // change is on disk (true) or was discarded (false).
+    if (savePromise) {
+        saveAgain = true;
+        return savePromise;
+    }
+    savePromise = (async () => {
+        let ok;
+        do {
+            saveAgain = false;
+            ok = await postData();
+        } while (ok && saveAgain);
+        return ok;
+    })();
+    try {
+        return await savePromise;
+    } finally {
+        savePromise = null;
+    }
+}
+
+// Sends allData once. The server rejects it with 409 if the file changed since
+// we loaded it (_meta.updatedAt). On any failure the unsaved local change is
+// thrown away by reloading the server state, so the UI never drifts away from
+// what is actually stored.
+async function postData() {
     try {
         const response = await fetch('/api/bookmarks', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(allData),
         });
-        const result = await response.json();
-        if (result.success) {
-            if (result._meta) allData._meta = result._meta;
-            renderAll();
-        } else {
-            alert('Speichern fehlgeschlagen: ' + (result.error || 'unbekannter Fehler'));
+        if (response.status === 409) {
+            alert('Die Bookmarks wurden inzwischen auf einem anderen Gerät oder in einem anderen Tab geändert. '
+                + 'Deine letzte Änderung wurde nicht gespeichert, der aktuelle Stand wird geladen.');
+            await loadData();
+            return false;
         }
+        const result = await readJson(response);
+        if (result._meta) allData._meta = result._meta;
+        renderAll();
+        return true;
     } catch (error) {
         console.error('Error saving bookmarks:', error);
-        alert('Speichern fehlgeschlagen: ' + error.message);
+        alert('Speichern fehlgeschlagen: ' + error.message + '\nDer zuletzt gespeicherte Stand wird wieder geladen.');
+        await loadData();
+        return false;
     }
+}
+
+// Parses a JSON API response; non-2xx (incl. HTML error pages from a proxy)
+// becomes an Error with a readable message instead of a JSON SyntaxError.
+async function readJson(response) {
+    if (!response.ok) {
+        let msg = 'HTTP ' + response.status;
+        try { const body = await response.json(); if (body && body.error) msg = body.error; } catch {}
+        throw new Error(msg);
+    }
+    return response.json();
+}
+
+// Guard for every write path. Returns false (and tells the user) while the
+// data on screen is not a confirmed server state.
+function requireEditable() {
+    if (editable) return true;
+    alert('Bearbeiten ist gerade nicht möglich, weil keine Verbindung zum Server besteht.');
+    return false;
 }
 
 async function importDoc(doc, filename) {
@@ -160,9 +227,7 @@ async function importDoc(doc, filename) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
     });
-    const result = await response.json();
-    if (!result.success) throw new Error(result.error || 'Import fehlgeschlagen');
-    return result;
+    return readJson(response);
 }
 
 // --- rendering --------------------------------------------------------------
@@ -421,9 +486,9 @@ function renderGeneralBookmarks() {
 
 // --- import / export / reset / logo upload ----------------------------------
 
-function triggerImport() { document.getElementById('importFileInput').click(); }
-function triggerExport() { window.location.href = '/api/bookmarks/export'; }
-function triggerLogoUpload() { document.getElementById('logoFileInput').click(); }
+function triggerImport() { if (requireEditable()) document.getElementById('importFileInput').click(); }
+function triggerExport() { if (requireEditable()) window.location.href = '/api/bookmarks/export'; }
+function triggerLogoUpload() { if (requireEditable()) document.getElementById('logoFileInput').click(); }
 
 async function uploadLogo(file) {
     if (!file) return;
@@ -434,8 +499,7 @@ async function uploadLogo(file) {
             headers: { 'Content-Type': file.type },
             body: file,
         });
-        const result = await r.json();
-        if (!result.success) throw new Error(result.error || 'Upload fehlgeschlagen');
+        await readJson(r);
         bustLogoCache();
         const btn = document.getElementById('manageLogoResetBtn');
         if (btn) btn.hidden = false;
@@ -445,11 +509,11 @@ async function uploadLogo(file) {
 }
 
 async function resetLogo() {
+    if (!requireEditable()) return;
     if (!confirm('Eigenes Logo entfernen und Standard wiederherstellen?')) return;
     try {
         const r = await fetch('/api/logo', { method: 'DELETE' });
-        const result = await r.json();
-        if (!result.success) throw new Error('Reset fehlgeschlagen');
+        const result = await readJson(r);
         bustLogoCache();
         const btn = document.getElementById('manageLogoResetBtn');
         if (btn) btn.hidden = result.removed === 0;
@@ -467,7 +531,8 @@ function bustLogoCache() {
 }
 
 async function resetData() {
-    if (!confirm('Wirklich alle Bookmarks zurücksetzen? Eine Sicherung wird in bookmarks.backup.json angelegt.')) return;
+    if (!requireEditable()) return;
+    if (!confirm('Wirklich alle Bookmarks zurücksetzen? Eine Sicherung wird im Ordner backups angelegt.')) return;
     try {
         await importDoc({ categories: [], tools: [], bookmarks: [] }, 'empty.json');
         await loadData();
@@ -477,6 +542,7 @@ async function resetData() {
 }
 
 async function loadExample() {
+    if (!requireEditable()) return;
     try {
         const r = await fetch('/bookmarks.example.json');
         if (!r.ok) throw new Error('Beispiel-Datei nicht gefunden');
@@ -505,25 +571,28 @@ async function handleImportFile(file) {
 
 // --- mutation handlers (unified for categories and tools) -------------------
 
+// Save handlers wait for the server before closing the dialog. The dialog
+// closes on failure too: the data was reloaded and the indices captured when
+// it opened may no longer point at the same entry.
 function addCategory() {
-    showEditModal('Kategorie hinzufügen', { collapsed: false }, 'category', () => {
+    showEditModal('Kategorie hinzufügen', { collapsed: false }, 'category', async () => {
         const name = document.getElementById('editName').value.trim();
         if (!name) { alert('Bitte einen Namen eingeben'); return; }
         const collapsed = document.getElementById('editCollapsed').checked;
         allData.categories.push({ name, collapsed, links: [] });
-        saveData();
+        await saveData();
         closeEditModal();
     });
 }
 
 function editCategoryEntry(idx) {
     const entry = allData.categories[idx];
-    showEditModal('Kategorie bearbeiten', { name: entry.name, collapsed: isCollapsed(entry) }, 'category', () => {
+    showEditModal('Kategorie bearbeiten', { name: entry.name, collapsed: isCollapsed(entry) }, 'category', async () => {
         const name = document.getElementById('editName').value.trim();
         if (!name) { alert('Bitte einen Namen eingeben'); return; }
         allData.categories[idx].name = name;
         allData.categories[idx].collapsed = document.getElementById('editCollapsed').checked;
-        saveData();
+        await saveData();
         closeEditModal();
     });
 }
@@ -537,24 +606,24 @@ function deleteCategoryEntry(idx) {
 }
 
 function addCategoryLink(catIdx) {
-    showEditModal('Bookmark hinzufügen', null, 'link', () => {
+    showEditModal('Bookmark hinzufügen', null, 'link', async () => {
         const name = document.getElementById('editName').value.trim();
         const url = document.getElementById('editUrl').value.trim();
         if (!name || !url) { alert('Bitte alle Felder ausfüllen'); return; }
         allData.categories[catIdx].links.push({ name, url });
-        saveData();
+        await saveData();
         closeEditModal();
     });
 }
 
 function editCategoryLink(catIdx, linkIdx) {
     const link = allData.categories[catIdx].links[linkIdx];
-    showEditModal('Bookmark bearbeiten', link, 'link', () => {
+    showEditModal('Bookmark bearbeiten', link, 'link', async () => {
         const name = document.getElementById('editName').value.trim();
         const url = document.getElementById('editUrl').value.trim();
         if (!name || !url) { alert('Bitte alle Felder ausfüllen'); return; }
         allData.categories[catIdx].links[linkIdx] = { name, url };
-        saveData();
+        await saveData();
         closeEditModal();
     });
 }
@@ -567,24 +636,24 @@ function deleteCategoryLink(catIdx, linkIdx) {
 }
 
 function addGeneralBookmark() {
-    showEditModal('Bookmark hinzufügen', null, 'link', () => {
+    showEditModal('Bookmark hinzufügen', null, 'link', async () => {
         const name = document.getElementById('editName').value.trim();
         const url = document.getElementById('editUrl').value.trim();
         if (!name || !url) { alert('Bitte alle Felder ausfüllen'); return; }
         allData.bookmarks.push({ name, url });
-        saveData();
+        await saveData();
         closeEditModal();
     });
 }
 
 function editLooseBookmark(idx) {
     const bookmark = allData.bookmarks[idx];
-    showEditModal('Bookmark bearbeiten', bookmark, 'link', () => {
+    showEditModal('Bookmark bearbeiten', bookmark, 'link', async () => {
         const name = document.getElementById('editName').value.trim();
         const url = document.getElementById('editUrl').value.trim();
         if (!name || !url) { alert('Bitte alle Felder ausfüllen'); return; }
         allData.bookmarks[idx] = { name, url };
-        saveData();
+        await saveData();
         closeEditModal();
     });
 }
@@ -619,13 +688,25 @@ function showEditModal(title, data, type, onSave) {
               + '<input type="url" id="editUrl" value="' + escapeHtml(data && data.url || '') + '" placeholder="https://example.com"></div>';
     }
     html += '<div class="form-actions">'
-          + '<button type="button" class="btn-save" onclick="handleSave()">Speichern</button>'
+          + '<button type="button" class="btn-save" onclick="runSave(this)">Speichern</button>'
           + '<button type="button" class="btn-cancel" onclick="closeEditModal()">Abbrechen</button>'
           + '</div></form>';
     editForm.innerHTML = html;
     window.handleSave = onSave;
     document.getElementById('editModal').classList.add('active');
     setTimeout(() => { const f = document.getElementById('editName'); if (f) f.focus(); }, 50);
+}
+
+// Disables the button while the save runs, so a double click can't add the
+// same entry twice.
+async function runSave(btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+        await window.handleSave();
+    } finally {
+        btn.disabled = false;
+    }
 }
 
 function closeEditModal() {
