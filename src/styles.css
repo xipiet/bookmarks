@@ -228,6 +228,34 @@ h1 {
     accent-color: #5577aa;
 }
 
+/* Categories marked "Seitenleiste". On wide screens they sit fixed in the free
+   space under the logo, left of the centered container; below that width
+   there is no room, so they join the normal flow above the grid. */
+.sidebar {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));   /* same grid as .categories */
+    gap: 40px;
+    margin-bottom: 40px;
+}
+
+.sidebar[hidden] {
+    display: none;
+}
+
+@media (min-width: 1440px) {
+    .sidebar {
+        position: fixed;
+        top: 205px;   /* fixed logo: top 45px + 120px height + 40px gap */
+        left: 45px;
+        /* up to the container's left edge ((100vw - 900px) / 2) minus a gap */
+        width: min(360px, calc((100vw - 900px) / 2 - 95px));
+        grid-template-columns: 1fr;
+        max-height: calc(100vh - 245px);
+        overflow-y: auto;
+        margin-bottom: 0;
+    }
+}
+
 .categories {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));

@@ -39,6 +39,12 @@ function isCollapsed(entry) {
     return !!(entry && entry.collapsed);
 }
 
+// A category with `sidebar: true` renders in the column under the logo
+// instead of the main grid. Missing defaults to the grid.
+function isSidebar(entry) {
+    return !!(entry && entry.sidebar);
+}
+
 // --- data layer -------------------------------------------------------------
 
 const SNAPSHOT_KEY = 'bookmarks.snapshot';
@@ -318,6 +324,7 @@ function renderAll() {
 function renderError(msg) {
     const content = document.getElementById('content');
     document.getElementById('emptyState').hidden = true;
+    document.getElementById('sidebar').hidden = true;
     content.hidden = false;
     content.innerHTML = '<div class="no-results">' + escapeHtml(msg) + '</div>';
 }
@@ -329,35 +336,41 @@ function isContentEmpty() {
 
 function renderContent() {
     const content = document.getElementById('content');
+    const sidebar = document.getElementById('sidebar');
     const emptyState = document.getElementById('emptyState');
     content.innerHTML = '';
+    sidebar.innerHTML = '';
 
     if (isContentEmpty()) {
         emptyState.hidden = false;
         content.hidden = true;
+        sidebar.hidden = true;
         return;
     }
     emptyState.hidden = true;
     content.hidden = false;
 
     (allData.categories || []).forEach(entry => {
-        if (isCollapsed(entry)) {
-            const div = document.createElement('div');
-            div.className = 'tool-category';
-            div.innerHTML = '<h2>' + escapeHtml(entry.name) + '</h2>';
-            div.onclick = () => openCategoryModal(entry);
-            content.appendChild(div);
-        } else {
-            const div = document.createElement('div');
-            div.className = 'category';
-            const items = (entry.links || []).map(link =>
-                '<li><a href="' + safeHref(link.url) + '" target="_blank" rel="noopener">'
-                + faviconImg(link.url) + '<span>' + escapeHtml(link.name) + '</span></a></li>'
-            ).join('');
-            div.innerHTML = '<h2>' + escapeHtml(entry.name) + '</h2><ul>' + items + '</ul>';
-            content.appendChild(div);
-        }
+        (isSidebar(entry) ? sidebar : content).appendChild(renderCategoryBlock(entry));
     });
+    sidebar.hidden = !sidebar.hasChildNodes();
+}
+
+function renderCategoryBlock(entry) {
+    const div = document.createElement('div');
+    if (isCollapsed(entry)) {
+        div.className = 'tool-category';
+        div.innerHTML = '<h2>' + escapeHtml(entry.name) + '</h2>';
+        div.onclick = () => openCategoryModal(entry);
+    } else {
+        div.className = 'category';
+        const items = (entry.links || []).map(link =>
+            '<li><a href="' + safeHref(link.url) + '" target="_blank" rel="noopener">'
+            + faviconImg(link.url) + '<span>' + escapeHtml(link.name) + '</span></a></li>'
+        ).join('');
+        div.innerHTML = '<h2>' + escapeHtml(entry.name) + '</h2><ul>' + items + '</ul>';
+    }
+    return div;
 }
 
 function openCategoryModal(entry) {
@@ -509,7 +522,7 @@ function renderCategories() {
     if (!list) return;
     let html = '';
     allData.categories.forEach((cat, catIdx) => {
-        const mode = isCollapsed(cat) ? 'eingeklappt' : 'ausgeklappt';
+        const mode = (isCollapsed(cat) ? 'eingeklappt' : 'ausgeklappt') + (isSidebar(cat) ? ' · Seitenleiste' : '');
         const expanded = expandedInSettings.has(cat);
         html += '<div class="category-section' + (expanded ? '' : ' collapsed') + '">'
               + '<div class="admin-item category-header" draggable="true" data-drag-type="category" data-category="' + catIdx + '">'
@@ -658,11 +671,12 @@ async function handleImportFile(file) {
 // closes on failure too: the data was reloaded and the indices captured when
 // it opened may no longer point at the same entry.
 function addCategory() {
-    showEditModal('Kategorie hinzufügen', { collapsed: false }, 'category', async () => {
+    showEditModal('Kategorie hinzufügen', { collapsed: false, sidebar: false }, 'category', async () => {
         const name = document.getElementById('editName').value.trim();
         if (!name) { alert('Bitte einen Namen eingeben'); return; }
         const collapsed = document.getElementById('editCollapsed').checked;
-        allData.categories.push({ name, collapsed, links: [] });
+        const sidebar = document.getElementById('editSidebar').checked;
+        allData.categories.push({ name, collapsed, sidebar, links: [] });
         await saveData();
         closeEditModal();
     });
@@ -670,11 +684,13 @@ function addCategory() {
 
 function editCategoryEntry(idx) {
     const entry = allData.categories[idx];
-    showEditModal('Kategorie bearbeiten', { name: entry.name, collapsed: isCollapsed(entry) }, 'category', async () => {
+    const data = { name: entry.name, collapsed: isCollapsed(entry), sidebar: isSidebar(entry) };
+    showEditModal('Kategorie bearbeiten', data, 'category', async () => {
         const name = document.getElementById('editName').value.trim();
         if (!name) { alert('Bitte einen Namen eingeben'); return; }
         allData.categories[idx].name = name;
         allData.categories[idx].collapsed = document.getElementById('editCollapsed').checked;
+        allData.categories[idx].sidebar = document.getElementById('editSidebar').checked;
         await saveData();
         closeEditModal();
     });
@@ -770,12 +786,19 @@ function showEditModal(title, data, type, onSave) {
     let html = '<form onsubmit="event.preventDefault();">';
     if (type === 'category') {
         const collapsedChecked = data && data.collapsed ? ' checked' : '';
+        const sidebarChecked = data && data.sidebar ? ' checked' : '';
         html += '<div class="form-group"><label>Name</label>'
               + '<input type="text" id="editName" value="' + escapeHtml(data && data.name || '') + '" placeholder="z.B. Wichtig"></div>'
               + '<div class="form-group">'
               + '<label class="toggle-row">'
               + '<input type="checkbox" id="editCollapsed"' + collapsedChecked + '>'
               + '<span>Eingeklappt anzeigen — Bookmarks erst nach Klick sichtbar</span>'
+              + '</label>'
+              + '</div>'
+              + '<div class="form-group">'
+              + '<label class="toggle-row">'
+              + '<input type="checkbox" id="editSidebar"' + sidebarChecked + '>'
+              + '<span>In der Seitenleiste unter dem Logo anzeigen</span>'
               + '</label>'
               + '</div>';
     } else if (type === 'link') {
