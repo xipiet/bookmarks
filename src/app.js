@@ -24,10 +24,12 @@ function getDomainFromUrl(url) {
 
 function faviconImg(url) {
     const domain = getDomainFromUrl(url);
-    if (!domain) return '';
-    const d = escapeHtml(domain);
-    return '<img src="https://icons.duckduckgo.com/ip3/' + d + '.ico" alt="" class="favicon" ' +
-           'onerror="this.onerror=null;this.src=\'https://www.google.com/s2/favicons?domain=' + d + '&sz=32\'"/>';
+    // Plain hostnames only. The domain ends up inside a JS string in the
+    // onerror attribute, where the HTML parser undoes escapeHtml — a host like
+    // x'-alert(1)-' (valid for the URL parser) would otherwise run as code.
+    if (!domain || !/^[a-z0-9.-]+$/i.test(domain)) return '';
+    return '<img src="https://icons.duckduckgo.com/ip3/' + domain + '.ico" alt="" class="favicon" ' +
+           'onerror="this.onerror=null;this.src=\'https://www.google.com/s2/favicons?domain=' + domain + '&sz=32\'"/>';
 }
 
 // A category is "collapsed" if it renders as a clickable tile that opens a
@@ -605,12 +607,29 @@ function deleteCategoryEntry(idx) {
     }
 }
 
+// Reads the name/URL dialog. A URL without scheme ("github.com", typical on the
+// phone) gets https:// in front; other schemes are refused, because safeHref
+// would turn them into a dead "#" link without any hint.
+function readLinkForm() {
+    const name = document.getElementById('editName').value.trim();
+    let url = document.getElementById('editUrl').value.trim();
+    if (!name || !url) { alert('Bitte alle Felder ausfüllen'); return null; }
+    // "scheme:" but not "host:port" (e.g. localhost:8080)
+    const hasScheme = /^[a-z][a-z0-9+.-]*:(?!\d)/i.test(url);
+    if (hasScheme && !/^https?:\/\//i.test(url)) {
+        alert('Nur Adressen mit http:// oder https:// sind möglich.');
+        return null;
+    }
+    if (!hasScheme && !url.startsWith('/') && !url.startsWith('#')) url = 'https://' + url;
+    try { new URL(url, location.href); } catch { alert('Ungültige Adresse: ' + url); return null; }
+    return { name, url };
+}
+
 function addCategoryLink(catIdx) {
     showEditModal('Bookmark hinzufügen', null, 'link', async () => {
-        const name = document.getElementById('editName').value.trim();
-        const url = document.getElementById('editUrl').value.trim();
-        if (!name || !url) { alert('Bitte alle Felder ausfüllen'); return; }
-        allData.categories[catIdx].links.push({ name, url });
+        const link = readLinkForm();
+        if (!link) return;
+        allData.categories[catIdx].links.push(link);
         await saveData();
         closeEditModal();
     });
@@ -619,10 +638,9 @@ function addCategoryLink(catIdx) {
 function editCategoryLink(catIdx, linkIdx) {
     const link = allData.categories[catIdx].links[linkIdx];
     showEditModal('Bookmark bearbeiten', link, 'link', async () => {
-        const name = document.getElementById('editName').value.trim();
-        const url = document.getElementById('editUrl').value.trim();
-        if (!name || !url) { alert('Bitte alle Felder ausfüllen'); return; }
-        allData.categories[catIdx].links[linkIdx] = { name, url };
+        const edited = readLinkForm();
+        if (!edited) return;
+        allData.categories[catIdx].links[linkIdx] = edited;
         await saveData();
         closeEditModal();
     });
@@ -637,10 +655,9 @@ function deleteCategoryLink(catIdx, linkIdx) {
 
 function addGeneralBookmark() {
     showEditModal('Bookmark hinzufügen', null, 'link', async () => {
-        const name = document.getElementById('editName').value.trim();
-        const url = document.getElementById('editUrl').value.trim();
-        if (!name || !url) { alert('Bitte alle Felder ausfüllen'); return; }
-        allData.bookmarks.push({ name, url });
+        const link = readLinkForm();
+        if (!link) return;
+        allData.bookmarks.push(link);
         await saveData();
         closeEditModal();
     });
@@ -649,10 +666,9 @@ function addGeneralBookmark() {
 function editLooseBookmark(idx) {
     const bookmark = allData.bookmarks[idx];
     showEditModal('Bookmark bearbeiten', bookmark, 'link', async () => {
-        const name = document.getElementById('editName').value.trim();
-        const url = document.getElementById('editUrl').value.trim();
-        if (!name || !url) { alert('Bitte alle Felder ausfüllen'); return; }
-        allData.bookmarks[idx] = { name, url };
+        const edited = readLinkForm();
+        if (!edited) return;
+        allData.bookmarks[idx] = edited;
         await saveData();
         closeEditModal();
     });
