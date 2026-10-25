@@ -158,25 +158,32 @@ async function loadFromServer() {
 
 let retryTimer = null;
 let retryCount = 0;
+// Timestamp of the snapshot currently on screen (null while showing fresh
+// data). Lets repeated failed retries skip re-rendering, which would e.g.
+// wipe search results in an open dialog every minute.
+let shownSnapshotAt = null;
+
+function renderSnapshot(snap) {
+    allData = snap.doc;
+    normalizeData();
+    renderAll();
+    shownSnapshotAt = snap.at;
+}
 
 // Server out of reach: show the last confirmed state read-only (or an error if
 // this device has none yet) and keep retrying in the background.
 function showOffline(reason) {
     editable = false;
     const snap = readSnapshot();
-    if (snap) {
-        allData = snap.doc;
-        normalizeData();
-        renderAll();
-    } else {
-        renderError('Konnte Bookmarks nicht laden: ' + reason);
-    }
+    if (!snap) renderError('Konnte Bookmarks nicht laden: ' + reason);
+    else if (snap.at !== shownSnapshotAt) renderSnapshot(snap);
     renderBanner(snap && snap.at, reason);
     scheduleRetry();
 }
 
 function setOnline() {
     editable = true;
+    shownSnapshotAt = null;
     retryCount = 0;
     clearTimeout(retryTimer);
     renderBanner();
@@ -1002,11 +1009,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // replaces it with fresh data, or keeps it and shows the offline banner.
     // Without this the page stays blank until a hanging request times out.
     const snap = readSnapshot();
-    if (snap) {
-        allData = snap.doc;
-        normalizeData();
-        renderAll();
-    }
+    if (snap) renderSnapshot(snap);
     loadData();
 
     window.addEventListener('online', refreshFromServer);
